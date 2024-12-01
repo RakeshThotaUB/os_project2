@@ -30,6 +30,7 @@ process_execute (const char *file_name)
 {
   char *fn_copy;
   tid_t tid;
+  char *save_ptr;
   
   /* Make a copy of FILE_NAME.
      Otherwise there's a race between the caller and load(). */
@@ -37,8 +38,7 @@ process_execute (const char *file_name)
   if (fn_copy == NULL)
     return TID_ERROR;
   strlcpy (fn_copy, file_name, PGSIZE);
-  char *save_ptr;
-  file_name = strtok_r (file_name," ",&save_ptr);
+  file_name = strtok_r ((char *)file_name, " ", &save_ptr);
   /* Create a new thread to execute FILE_NAME. */
   tid = thread_create (file_name, PRI_DEFAULT, start_process, fn_copy);
   if (tid == TID_ERROR)
@@ -52,7 +52,6 @@ process_execute (const char *file_name)
 static void
 start_process (void *file_name_)
 {
-  //printf("In start_process\n");
   char *file_name = file_name_;
   struct intr_frame if_;
   bool success;
@@ -91,7 +90,7 @@ start_process (void *file_name_)
 int
 process_wait (tid_t child_tid UNUSED) 
 {
-  while(!thread_current()->ex)
+  while(!thread_current()->exit_status)
     ;
   return -1;
 }
@@ -216,7 +215,6 @@ static bool load_segment (struct file *file, off_t ofs, uint8_t *upage,
 bool
 load (const char *file_name, void (**eip) (void), void **esp) 
 {
-  //printf("In load\n");
   struct thread *t = thread_current ();
   struct Elf32_Ehdr ehdr;
   struct file *file = NULL;
@@ -230,15 +228,14 @@ load (const char *file_name, void (**eip) (void), void **esp)
     goto done;
   process_activate ();
   
-  /* Open executable file. */
-  char * fn_cp = malloc (strlen(file_name)+1);
-  strlcpy(fn_cp, file_name, strlen(file_name)+1);
-  
-  char * save_ptr;
-  fn_cp = strtok_r(fn_cp," ",&save_ptr);
-  file = filesys_open (fn_cp);
-  //TODO : Free fn_cp
-  
+
+  char *file_name_cp = palloc_get_page(0), *program_name;
+  strlcpy(file_name_cp, file_name, PGSIZE);
+  char *save_ptr;
+  program_name = strtok_r(file_name_cp, " ", &save_ptr);
+  file = filesys_open (program_name);
+  palloc_free_page(file_name_cp);
+
   if (file == NULL) 
     {
       printf ("load: %s: open failed\n", file_name);
@@ -320,6 +317,47 @@ load (const char *file_name, void (**eip) (void), void **esp)
   /* Set up stack. */
   if (!setup_stack (esp,file_name))
     goto done;
+/* Parse arguments and set up stack. */
+  char *arg, *temp, *argv[64], size_char;
+  int argc = 0, size_int;
+  size_int =  sizeof(int);
+  size_char = sizeof(void *);
+
+  for (arg = strtok_r((char *)file_name, " ", &save_ptr); arg != NULL; arg = strtok_r(NULL, " ", &save_ptr)) 
+  {
+      int arg_len;
+      while (arg[arg_len] != '\0') {
+          arg_len++;
+      }
+      *esp = *esp - arg_len; 
+      memcpy(*esp, arg, arg_len);
+      argv[argc++] = *esp;
+  }
+
+  // Aligning the stack for a word boundary.
+  *esp = ((int)*esp) & 0xfffffffc;
+
+  // Push the pointers to the arguments.
+  argv[argc] = NULL;
+
+  for (i = argc; i >= 0; i--) 
+  {
+      *esp = *esp - size_char;
+      memcpy(*esp, &argv[i], size_char);
+  }
+
+  // Push the argv
+  void *argv_pointer = *esp;
+  *esp = *esp - sizeof(char **);
+  memcpy(*esp, &argv_pointer, sizeof(char **));
+
+  // Push the argc
+  *esp = *esp - size_int;
+  *(int *)(*esp) = argc;
+
+  *esp = *esp - size_char;
+  memset(*esp, 0, size_char);
+
 
   /* Start address. */
   *eip = (void (*) (void)) ehdr.e_entry;
@@ -452,64 +490,16 @@ setup_stack (void **esp, char * file_name)
   if (kpage != NULL) 
     {
       success = install_page (((uint8_t *) PHYS_BASE) - PGSIZE, kpage, true);
-      if (success)
-        *esp = PHYS_BASE;
+      if (success){
+          *esp = PHYS_BASE - 12;
+          
+
+      }  
       else
         palloc_free_page (kpage);
     }
 
-  char *token, *save_ptr;
-  int argc = 0,i;
-
-  char * copy = malloc(strlen(file_name)+1);
-  strlcpy (copy, file_name, strlen(file_name)+1);
-
-
-  for (token = strtok_r (copy, " ", &save_ptr); token != NULL;
-    token = strtok_r (NULL, " ", &save_ptr))
-    argc++;
-
-
-  int *argv = calloc(argc,sizeof(int));
-
-  for (token = strtok_r (file_name, " ", &save_ptr),i=0; token != NULL;
-    token = strtok_r (NULL, " ", &save_ptr),i++)
-    {
-      *esp -= strlen(token) + 1;
-      memcpy(*esp,token,strlen(token) + 1);
-
-      argv[i]=*esp;
-    }
-
-  while((int)*esp%4!=0)
-  {
-    *esp-=sizeof(char);
-    char x = 0;
-    memcpy(*esp,&x,sizeof(char));
-  }
-
-  int zero = 0;
-
-  *esp-=sizeof(int);
-  memcpy(*esp,&zero,sizeof(int));
-
-  for(i=argc-1;i>=0;i--)
-  {
-    *esp-=sizeof(int);
-    memcpy(*esp,&argv[i],sizeof(int));
-  }
-
-  int pt = *esp;
-  *esp-=sizeof(int);
-  memcpy(*esp,&pt,sizeof(int));
-
-  *esp-=sizeof(int);
-  memcpy(*esp,&argc,sizeof(int));
-
-  *esp-=sizeof(int);
-  memcpy(*esp,&zero,sizeof(int));
-
-  return success;
+    return success;
 }
 
 /* Adds a mapping from user virtual address UPAGE to kernel

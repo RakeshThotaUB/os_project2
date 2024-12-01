@@ -92,8 +92,8 @@ struct thread
 
     /* Shared between thread.c and synch.c. */
     struct list_elem elem;              /* List element. */
-    bool ex;
-
+    
+    bool exit_status;
     struct thread* parent;
 
 #ifdef USERPROG

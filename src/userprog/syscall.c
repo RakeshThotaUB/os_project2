@@ -26,24 +26,32 @@ syscall_handler (struct intr_frame *f UNUSED)
 	switch (system_call)
 	{
 		case SYS_HALT:
+    {
 		shutdown_power_off();
     NOT_REACHED();
+    }
 		break;
 
 		case SYS_EXIT:
-		thread_current()->parent->ex = true;
+    {
+		thread_current()->parent->exit_status = true;
 		thread_exit();
+    }
 		break;
 
 		case SYS_WRITE:
-		if(*(p+5)==1)
-		{
-			putbuf(*(p+6),*(p+7));
-		}
+    {
+      int fd = *(p + 1), size;
+      char *buffer = *(p + 2);
+      size = *(p + 3);
+      if (fd == 1){
+        putbuf(buffer, size);
+      }
+    }
 		break;
 
 		default:
-		printf("No match\n");
+		printf("There are no match for system call %d\n", system_call);
 	}
 }
 
