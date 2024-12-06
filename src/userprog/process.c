@@ -313,6 +313,16 @@ load (const char *file_name, void (**eip) (void), void **esp)
           break;
         }
     }
+int process_write(int fd, const void *buffer, unsigned size)
+{
+  if (fd == STDOUT_FILENO){
+    putbuf((char *)buffer, (size_t)size);
+    return (int)size;
+  }else if (get_fd_entry(fd) != NULL){
+    return (int)file_write(get_fd_entry(fd)->file, buffer, size);
+  }
+  return -1;
+}
 
   /* Set up stack. */
   if (!setup_stack (esp,file_name))
