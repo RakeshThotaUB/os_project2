@@ -4,6 +4,8 @@
 #include <debug.h>
 #include <list.h>
 #include <stdint.h>
+#include "filesys/file.h"
+#include "threads/synch.h"
 
 /* States in a thread's life cycle. */
 enum thread_status
@@ -24,6 +26,8 @@ typedef int tid_t;
 #define PRI_DEFAULT 31                  /* Default priority. */
 #define PRI_MAX 63                      /* Highest priority. */
 
+/* Maximum file descriptors for a process */
+#define MAX_FD 128
 /* A kernel thread or user process.
 
    Each thread structure is stored in its own 4 kB page.  The
@@ -92,18 +96,32 @@ struct thread
 
     /* Shared between thread.c and synch.c. */
     struct list_elem elem;              /* List element. */
-    
     bool exit_status;
-    struct thread* parent;
 
-#ifdef USERPROG
+// #ifdef USERPROG
     /* Owned by userprog/process.c. */
     uint32_t *pagedir;                  /* Page directory. */
-#endif
+    struct file *fd[MAX_FD];		
+    struct list child_meta_list;
+    struct child_metadata *md;
+
+// #endif
 
     /* Owned by thread.c. */
     unsigned magic;                     /* Detects stack overflow. */
   };
+
+/* Metadata for a process */
+struct child_metadata
+{
+  tid_t tid;
+  int exit_status;
+  bool load_success;
+  struct file *exec_file;
+  struct semaphore completed;
+  struct semaphore child_load;
+  struct list_elem infoelem;
+};
 
 /* If false (default), use round-robin scheduler.
    If true, use multi-level feedback queue scheduler.

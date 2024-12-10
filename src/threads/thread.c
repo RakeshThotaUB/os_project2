@@ -11,6 +11,7 @@
 #include "threads/switch.h"
 #include "threads/synch.h"
 #include "threads/vaddr.h"
+#include "threads/malloc.h"
 #ifdef USERPROG
 #include "userprog/process.h"
 #endif
@@ -70,6 +71,7 @@ static void *alloc_frame (struct thread *, size_t size);
 static void schedule (void);
 void thread_schedule_tail (struct thread *prev);
 static tid_t allocate_tid (void);
+struct child_metadata *init_child_metadata (tid_t child_tid);
 
 /* Initializes the threading system by transforming the code
    that's currently running into a thread.  This can't work in
@@ -182,6 +184,11 @@ thread_create (const char *name, int priority,
   /* Initialize thread. */
   init_thread (t, name, priority);
   tid = t->tid = allocate_tid ();
+#ifdef USERPROG
+  int i;
+  for (i = 0; i < MAX_FD; i++)
+    t->fd[i] = NULL;
+#endif
 
   /* Stack frame for kernel_thread(). */
   kf = alloc_frame (t, sizeof *kf);
@@ -198,6 +205,7 @@ thread_create (const char *name, int priority,
   sf->eip = switch_entry;
   sf->ebp = 0;
 
+  t->md = init_child_metadata (tid);
   /* Add to run queue. */
   thread_unblock (t);
 
@@ -463,11 +471,28 @@ init_thread (struct thread *t, const char *name, int priority)
   t->stack = (uint8_t *) t + PGSIZE;
   t->priority = priority;
   t->magic = THREAD_MAGIC;
-  t->exit_status = false;
-  t->parent = running_thread();
+  list_init (&t->child_meta_list);
+
   old_level = intr_disable ();
   list_push_back (&all_list, &t->allelem);
   intr_set_level (old_level);
+}
+
+/* Initializes the process_metadata structure */
+struct child_metadata *
+init_child_metadata (tid_t child_tid)
+{
+  struct child_metadata *metadata = 
+		calloc (1, sizeof (struct child_metadata));
+  metadata->tid = child_tid;
+  metadata->load_success = false;
+  metadata->exec_file = NULL;
+  sema_init (&metadata->completed, 0);
+  sema_init (&metadata->child_load, 0);
+  metadata->exit_status = 0;
+  struct list children = thread_current ()->child_meta_list;
+  list_push_front (&children, &metadata->infoelem);
+  return metadata;
 }
 
 /* Allocates a SIZE-byte frame at the top of thread T's stack and
