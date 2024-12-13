@@ -16,11 +16,14 @@
 #include "threads/interrupt.h"
 #include "threads/palloc.h"
 #include "threads/thread.h"
-#include "threads/malloc.h"
 #include "threads/vaddr.h"
+#include "threads/malloc.h"
+#include "devices/timer.h"
 
 static thread_func start_process NO_RETURN;
-static bool load (const char *cmdline, void (**eip) (void), void **esp);
+static bool load (const char *cmdline, void (**eip) (void), void **esp,
+		  char **save_ptr);
+
 #define DEFAULT_ARGV_SIZE  2
 #define WORD_SIZE 4
 #define MAX_CMD_LINE 512
@@ -33,20 +36,43 @@ tid_t
 process_execute (const char *file_name) 
 {
   char *fn_copy;
-  tid_t tid;
   char *save_ptr;
-
+  tid_t tid;
+  
   /* Make a copy of FILE_NAME.
      Otherwise there's a race between the caller and load(). */
   fn_copy = palloc_get_page (0);
   if (fn_copy == NULL)
     return TID_ERROR;
   strlcpy (fn_copy, file_name, PGSIZE);
+
+  /* Get the file name from the input string */
   file_name = strtok_r ((char *)file_name, " ", &save_ptr);
+
   /* Create a new thread to execute FILE_NAME. */
   tid = thread_create (file_name, PRI_DEFAULT, start_process, fn_copy);
   if (tid == TID_ERROR)
     palloc_free_page (fn_copy); 
+
+  else 
+  {
+    struct list_elem *list_elem = list_begin (&(thread_current ()->child_meta_list));
+    while (list_elem != list_end (&(thread_current ()->child_meta_list)))
+    {
+      struct child_metadata *metadata = list_entry (list_elem, struct child_metadata, infoelem);
+      if (tid == metadata->tid)
+      {
+        sema_down (&metadata->child_load);
+        if (metadata->load_success == false){
+          tid = TID_ERROR;
+        }
+        sema_up (&metadata->child_load);
+        break;
+      }
+      list_elem = list_next (list_elem);
+    }
+  }
+
   return tid;
 }
 
@@ -55,26 +81,37 @@ process_execute (const char *file_name)
 static void
 start_process (void *file_name_)
 {
+  char  *save_ptr;
   char *file_name = file_name_;
   struct intr_frame if_;
   bool success;
-  
+  struct thread *cur = thread_current ();
+
+  file_name = strtok_r (file_name, " ", &save_ptr);
+  struct file *file = filesys_open (file_name);
+  thread_current ()->md->exec_file = file;
+
   /* Initialize interrupt frame and load executable. */
   memset (&if_, 0, sizeof if_);
   if_.gs = if_.fs = if_.es = if_.ds = if_.ss = SEL_UDSEG;
   if_.cs = SEL_UCSEG;
   if_.eflags = FLAG_IF | FLAG_MBS;
-  success = load (file_name, &if_.eip, &if_.esp);
+  success = load (file_name, &if_.eip, &if_.esp, &save_ptr);
 
   /* If load failed, quit. */
   palloc_free_page (file_name);
 
   if (!success)
   {
-   
+    cur->md->load_success = false; 
+    sema_up (&(cur->md->child_load));
     thread_exit ();
   }
-  
+  else
+  {
+    cur->md->load_success = true;
+    sema_up (&(cur->md->child_load));
+  }
 
   /* Start the user process by simulating a return from an
      interrupt, implemented by intr_exit (in
@@ -96,7 +133,7 @@ start_process (void *file_name_)
    This function will be implemented in problem 2-2.  For now, it
    does nothing. */
 int
-process_wait (tid_t child_tid UNUSED) 
+process_wait (tid_t child_tid) 
 {
   int exit_status = -1;
   struct list_elem *e;
@@ -235,7 +272,8 @@ static bool load_segment (struct file *file, off_t ofs, uint8_t *upage,
    and its initial stack pointer into *ESP.
    Returns true if successful, false otherwise. */
 bool
-load (const char *file_name, void (**eip) (void), void **esp) 
+load (const char *file_name, void (**eip) (void), void **esp, 
+      char **save_ptr) 
 {
   struct thread *t = thread_current ();
   struct Elf32_Ehdr ehdr;
@@ -244,26 +282,19 @@ load (const char *file_name, void (**eip) (void), void **esp)
   bool success = false;
   int i;
 
-  char *save_ptr, *local_save_ptr;
-  save_ptr = &local_save_ptr;
-  
   /* Allocate and activate page directory. */
   t->pagedir = pagedir_create ();
   if (t->pagedir == NULL) 
     goto done;
   process_activate ();
 
-  char *parsed_file_name = strtok_r ((char *)file_name, " ", save_ptr);
   /* Open executable file. */
   file = filesys_open (file_name);
-  t->md->exec_file = file;
-
   if (file == NULL) 
     {
       printf ("load: %s: open failed\n", file_name);
       goto done; 
     }
-
 
   /* Read and verify executable header. */
   if (file_read (file, &ehdr, sizeof ehdr) != sizeof ehdr
@@ -342,7 +373,7 @@ load (const char *file_name, void (**eip) (void), void **esp)
     goto done;
 
 
-  char *arg, *temp, size_char;
+char *arg, *temp, size_char;
   char **argv = malloc (DEFAULT_ARGV_SIZE * sizeof(char *));
   int argc = 0, argv_size = 2, size_int;
   size_int =  sizeof(int);
@@ -389,7 +420,6 @@ load (const char *file_name, void (**eip) (void), void **esp)
 
   *esp = *esp - size_char;
   memset(*esp, 0, size_char);
-
 
   /* Start address. */
   *eip = (void (*) (void)) ehdr.e_entry;
@@ -517,18 +547,18 @@ setup_stack (void **esp, const char *file_name, char **save_ptr)
 {
   uint8_t *kpage;
   bool success = false;
+  
 
   kpage = palloc_get_page (PAL_USER | PAL_ZERO);
   if (kpage != NULL) 
     {
       success = install_page (((uint8_t *) PHYS_BASE) - PGSIZE, kpage, true);
-      if (success){
+      if (success)
         *esp = PHYS_BASE - 12; 
-      
-      }
       else
-        palloc_free_page(kpage);
+        palloc_free_page (kpage);
     }
+
 
   return success;
 }
