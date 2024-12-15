@@ -547,7 +547,7 @@ or for any other reason, print the process's name
 and exit code, formatted as if printed by @code{printf ("%s:
 exit(%d)\n", @dots{});}.  The name printed should be the full name
 passed to @func{process_execute}, omitting command-line arguments.
-Do not print these messages when a kernel thread that is not a user
+Do not print these messages wh en a kernel thread that is not a user
 process terminates, or
 when the @code{halt} system call is invoked.  The message is optional
 when a process fails to load.

@@ -101,9 +101,9 @@ struct thread
 // #ifdef USERPROG
     /* Owned by userprog/process.c. */
     uint32_t *pagedir;                  /* Page directory. */
-    struct file *fd[MAX_FD];		
-    struct list child_meta_list;
-    struct child_metadata *md;
+    struct file *fd[128];		
+    struct list child_process_metalist;
+    struct process_metadata *proc_metadata;
 
 // #endif
 
@@ -112,15 +112,15 @@ struct thread
   };
 
 /* Metadata for a process */
-struct child_metadata
+struct process_metadata
 {
-  tid_t tid;
+  tid_t process_id;
   int exit_status;
-  bool load_success;
-  struct file *exec_file;
-  struct semaphore completed;
-  struct semaphore child_load;
-  struct list_elem infoelem;
+  bool load_status;
+  struct file *executable_file;
+  struct semaphore process_exit_sema;
+  struct semaphore process_load_sema;
+  struct list_elem metadata_elem;
 };
 
 /* If false (default), use round-robin scheduler.

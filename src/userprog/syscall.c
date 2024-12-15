@@ -16,136 +16,153 @@
 #include <kernel/console.h>
 #include <filesys/filesys.h>
 #include <filesys/file.h>
+#include <userprog/process.h>
 
-#define MAX_ARGS 3
-
-struct lock filesys_lock;
+struct semaphore filesys_sema;
 
 static void syscall_handler (struct intr_frame *);
-void validate_pointer (void *ptr);
-void get_arguments (int *esp, int *args, int count);
 
-void
-syscall_init (void) 
-{
-  intr_register_int (0x30, 3, INTR_ON, syscall_handler, "syscall");
-}
+// Macro is used for fetching the arguments
+#define FETCH_ARG(type, esp, offset) ({                  \
+    void *argument_pointer = (void *)((esp) + (offset) * 4);      \
+    check_ptr(argument_pointer);                                  \
+    (type)(*((type *)argument_pointer));                          \
+})
 
 static void
 syscall_handler (struct intr_frame *f) 
 {
-  int args[MAX_ARGS];
-  lock_init (&filesys_lock);
-  validate_pointer (f->esp);
-  int *sp = (int *)f->esp;
+  int args[3];
+  check_ptr (f->esp);
+
+  void *esp = f->esp;
+  int syscall_num = FETCH_ARG(int, esp, 0);
   struct thread *cur = thread_current ();
 
-  switch (*sp)
+  switch (syscall_num)
   {
    case SYS_HALT:
-      shutdown_power_off ();
-
-   case SYS_EXIT:
-      get_arguments (sp, &args[0], 1); 
-      exit ((int)args[0]);
+      syscall_halt ();
       break;
 
-   case SYS_EXEC:
-      get_arguments (sp, &args[0], 1);
-      f->eax = exec ((const char *)pagedir_get_page (cur->pagedir,
-					(const void *) args[0]));
+  case SYS_EXIT: {
+      int exit_status = FETCH_ARG(int, esp, 1);
+      exit(exit_status);
       break;
-
-   case SYS_WAIT:
-      get_arguments (sp, &args[0], 1);
-      f->eax = wait ((pid_t)args[0]);
-      break;
-    
-   case SYS_WRITE:
-      get_arguments (sp, &args[0], 3);
-      args[1] = (int)pagedir_get_page (cur->pagedir, (const void *)args[1]);
-      f->eax = write ((int)args[0], (void *)args[1], (unsigned)args[2]);
-      break;
-    
-   case SYS_READ:
-      get_arguments (sp, &args[0], 3);
-      f->eax = read ((int)args[0], (void *)args[1], (unsigned)args[2]);
-      break;
-
-   case SYS_CREATE:
-      get_arguments (sp, &args[0], 2);
-      args[0] =(int) pagedir_get_page (cur->pagedir, (const void *)args[0]);
-      f->eax = create ((char *)args[0], (unsigned) args[1]);
-      break;
-
-    case SYS_REMOVE:
-       get_arguments (sp, &args[0], 1);
-       char *file_to_close = (char *)pagedir_get_page (cur->pagedir,
-					(const void *)args[0]);
-       lock_acquire (&filesys_lock);
-       f->eax = filesys_remove (file_to_close);
-       if (lock_held_by_current_thread (&filesys_lock))
-         lock_release (&filesys_lock);
-       break;
-
-    case SYS_OPEN:
-       get_arguments (sp, &args[0], 1);
-       f->eax = open ((char *)args[0]);
-       break; 
-  
-    case SYS_FILESIZE:
-       get_arguments (sp, &args[0], 1);
-       f->eax = filesize ((int)args[0]);
-       break;
-
-    case SYS_CLOSE:
-       get_arguments (sp, &args[0], 1);
-       args[0] = (int)pagedir_get_page (cur->pagedir, (const void *)args[0]);
-       close ((int)args[0]);
-       break;       
-
-    case SYS_TELL:
-       get_arguments (sp, &args[0], 1);
-       f->eax = tell ((int)args[0]);
-       break;
-
-    case SYS_SEEK:
-       get_arguments (sp, &args[0], 2);
-       seek ((int)args[0], (unsigned)args[1]);
-       break; 
   }
+        
+
+   case SYS_EXEC: {
+      const char *command_line = FETCH_ARG(const char *, esp, 1);
+      f->eax = exec((const char *)pagedir_get_page(cur->pagedir, command_line));
+      break;
+  }
+
+  case SYS_WAIT: {
+      pid_t pid = FETCH_ARG(pid_t, esp, 1);
+      f->eax = syscall_wait(pid);
+      break;
+  }
+
+  case SYS_WRITE: {
+      int fd = FETCH_ARG(int, esp, 1);
+      const void *buffer = FETCH_ARG(const void *, esp, 2);
+      unsigned size = FETCH_ARG(unsigned, esp, 3);
+      buffer = pagedir_get_page(cur->pagedir, buffer);
+      f->eax = syscall_write(fd, buffer, size);
+      break;
+  }
+
+  case SYS_READ: {
+      int fd = FETCH_ARG(int, esp, 1);
+      void *buffer = FETCH_ARG(void *, esp, 2);
+      unsigned size = FETCH_ARG(unsigned, esp, 3);
+      f->eax = syscall_read(fd, buffer, size);
+      break;
+  }
+
+   case SYS_CREATE: {
+      const char *file_name = FETCH_ARG(const char *, esp, 1);
+      unsigned size = FETCH_ARG(unsigned, esp, 2);
+      file_name = (const char *)pagedir_get_page(cur->pagedir, file_name);
+      f->eax = create(file_name, size);
+      break;
+  }
+
+  case SYS_REMOVE: {
+      const char *file_name = FETCH_ARG(const char *, esp, 1);
+      file_name = (const char *)pagedir_get_page(cur->pagedir, file_name);
+      sema_down(&filesys_sema);
+      f->eax = filesys_remove(file_name);
+      sema_up(&filesys_sema);
+      break;
+  }
+
+  case SYS_OPEN: {
+      const char *file_name = FETCH_ARG(const char *, esp, 1);
+      f->eax = open(file_name);
+      break;
+  }
+
+  case SYS_FILESIZE: {
+      int fd = FETCH_ARG(int, esp, 1);
+      f->eax = filesize(fd);
+      break;
+  }
+
+  case SYS_CLOSE: {
+      int fd = FETCH_ARG(int, esp, 1);
+      close(fd);
+      break;
+  }
+
+  case SYS_TELL: {
+      int fd = FETCH_ARG(int, esp, 1);
+      f->eax = tell(fd);
+      break;
+  }
+
+  case SYS_SEEK: {
+      int fd = FETCH_ARG(int, esp, 1);
+      unsigned position = FETCH_ARG(unsigned, esp, 2);
+      seek(fd, position);
+      break;
+  }
+  default: {
+      exit(-1);
+  }
+}
 }
 
 void
 get_arguments (int *esp, int *args, int count)
 {
-  int i;
-  for (i = 0; i < count; i++)
+  for (int i = 0; i < count; i++)
   {
     int *next = ((esp + i) + 1);
-    validate_pointer (next);
+    check_ptr (next);
     args[i] = *next;
   }
 }
 
-void
-validate_pointer (void *ptr)
-{
-  if (!is_user_vaddr (ptr)) 
-    exit (-1);
-  if  ((pagedir_get_page (thread_current ()->pagedir, ptr) == NULL))
-    exit (-1);
+void 
+check_ptr(void *ptr) {
+    if (ptr == NULL || !is_user_vaddr(ptr) || pagedir_get_page(thread_current()->pagedir, ptr) == NULL) {
+        exit(-1);
+    }
+}
+
+void 
+syscall_halt(void) {
+    shutdown();
 }
 
 void
 exit (int status)
 {
- /* XXX: TODO
-    If the current thread exits, then it should be removed from its
-    parent's child list. */
   struct thread *cur = thread_current ();
-  cur->md->exit_status = status;
-  sema_up (&cur->md->completed);
+  cur->proc_metadata->exit_status = status;
+  sema_up (&cur->proc_metadata->process_exit_sema);
   printf ("%s: exit(%d)\n", cur->name, status);
   thread_exit ();
 }
@@ -153,82 +170,90 @@ exit (int status)
 bool
 create (const char *file_name, unsigned size)
 {
-  int return_value;
-  if (file_name == NULL)
-    exit (-1);    
-  lock_acquire (&filesys_lock);
-  return_value = filesys_create (file_name, size);
-  lock_release (&filesys_lock);
-  return return_value;
+  if (file_name == NULL) exit (-1);    
+  sema_down (&filesys_sema);
+  bool succ = filesys_create (file_name, size);
+  sema_up (&filesys_sema);
+  return succ;
 }
+
 int
 open (const char *file)
 {
+  
+  check_ptr ((void *)file);
+  if (file == NULL || strcmp(file, "") == 0) return -1;
+
+  sema_down (&filesys_sema);
+  struct file *opened_file = filesys_open (file); 
+  sema_up (&filesys_sema);
+
+  if (opened_file == NULL) return -1;
+
   struct thread *cur = thread_current ();
-  validate_pointer ((void *)file);
-  if (file == NULL)
-    exit (-1);
-  if (strcmp (file, "") == 0)
-    return -1;
-  lock_acquire (&filesys_lock);
-  struct file *open_file = filesys_open (file); 
-  if (lock_held_by_current_thread (&filesys_lock))
-     lock_release (&filesys_lock);
-  if (open_file == NULL)
-    return -1;
-  if (file_get_inode (open_file) == file_get_inode(cur->md->exec_file))
-      file_deny_write (open_file);
-  struct file **fd_array = cur->fd;
-  int k;
-  for (k = 2; k < MAX_FD; k++)
-  { 
-    if (fd_array[k] == NULL)
-    {
-     fd_array[k] = open_file;
-     break;
-    }
+  if (file_get_inode (opened_file) == file_get_inode(cur->proc_metadata->executable_file))
+      file_deny_write (opened_file);
+
+  int i = 2;
+  while (i < MAX_FD) {
+      if (cur->fd[i] == NULL) {
+          cur->fd[i] = opened_file;
+          return i;
+      }
+      i++;
   }
-   return k;
+  return -1;
 }  
 
-int
-read (int fd, void *_buffer, unsigned size)
+
+static int
+read_from_stdin(char *buffer, unsigned size)
 {
-  struct thread *cur = thread_current ();
-  char *buffer = (char *)_buffer;
-  validate_pointer (buffer);
-  int retval = -1;
-  if (fd == 1 || fd < 0 || fd > MAX_FD)
-    exit (-1); 
-  if (fd == 0)
+  unsigned val = 0;
+  while (val < size) // Leaving space for the null terminator 
   {
-    char c;
-    unsigned i = 0;
-    while ((c = input_getc ())!= '\n')
-    {
-      buffer[i] = c; 
-      i++;
-      if (i == size-1) break;
-    }
+    char input = input_getc();
+    buffer[val++] = input;
+    if (input == '\n') break;
   }
-  else {
-    lock_acquire (&filesys_lock);
-    struct file *file = cur->fd[fd];
-    if (file != NULL) {
-      if (file_get_inode (file) == file_get_inode(cur->md->exec_file))
-        file_deny_write (file);
-      retval = file_read (file, buffer, size);
-      cur->fd[fd] = file;
-    }
-    else retval = -1;
-    if (lock_held_by_current_thread (&filesys_lock))
-      lock_release (&filesys_lock);
+  return (int)val;  // Returning the number of bytes that are read
+}
+
+static 
+int read_from_file(int file_descriptor, char *buffer, unsigned size)
+{
+  struct thread *cur = thread_current();
+  struct file *fd_file = cur->fd[file_descriptor];
+   if (fd_file == NULL) return -1;  // Invalid fd
+  // Deny the writes if it is exec file
+  if (file_get_inode(fd_file) == file_get_inode(cur->proc_metadata->executable_file))
+  {
+    file_deny_write(fd_file);
   }
-  return retval;
+  return file_read(fd_file, buffer, size);
 }
 
 int
-write (int file_desc, const void *_buffer, unsigned size)
+syscall_read (int fd, void *buffer, unsigned size)
+{
+  struct thread *cur = thread_current ();
+  char *buff = (char *)buffer;
+  check_ptr (buff);
+  int return_value;
+  if (fd == 1 || fd < 0 || fd >= 128)
+    exit (-1);
+  if (fd == 0) return read_from_stdin(buff, size);
+  else  
+  {
+    sema_down(&filesys_sema);
+    return_value = read_from_file(fd, buff, size);
+    sema_up(&filesys_sema);
+  }
+  return return_value;
+}
+
+int
+syscall_write (int file_desc, const void *_buffer, unsigned size)
 {
   char *buffer = (char *)_buffer;
   struct thread *cur = thread_current ();
@@ -237,7 +262,7 @@ write (int file_desc, const void *_buffer, unsigned size)
   if (buffer == NULL)
     exit (-1);
   int retval;
-  if (file_desc < 1 || file_desc > MAX_FD)
+  if (file_desc < 1 || file_desc > 128)
     return -1;
   if (file_desc == 1) {
     putbuf (buffer, size);
@@ -245,7 +270,7 @@ write (int file_desc, const void *_buffer, unsigned size)
   }
   else
   {
-    lock_acquire (&filesys_lock);
+    sema_down (&filesys_sema);
     file_to_write = cur->fd[file_desc];
     if (file_to_write != NULL) {
     	retval = file_write (file_to_write, buffer, size);
@@ -253,62 +278,78 @@ write (int file_desc, const void *_buffer, unsigned size)
         file_allow_write (file_to_write);
     }
     else retval = -1;
-    if (lock_held_by_current_thread (&filesys_lock))
-      lock_release (&filesys_lock);
+    sema_up (&filesys_sema);
   }
   return retval;
 }
 
+
 void
-close (int fd)
+close (int file_descriptor)
 {
   struct thread *cur = thread_current ();
-  lock_acquire (&filesys_lock);
-  file_close (cur->fd[fd]);
-  cur->fd[fd] = NULL;
-  if (lock_held_by_current_thread (&filesys_lock))
-    lock_release (&filesys_lock);
+  if (file_descriptor >= 128 || file_descriptor < 2) 
+    return;
+  sema_down (&filesys_sema);
+  if (cur->fd[file_descriptor] != NULL) {
+    file_close (cur->fd[file_descriptor]);
+    cur->fd[file_descriptor] = NULL;
+  }
+  sema_up (&filesys_sema);
 }
 
 int
-filesize (int fd)
+filesize (int file_descriptor)
 {
-  struct file *file = thread_current ()->fd[fd];
-  if (file == NULL)
-   exit (-1);
+  struct thread *cur = thread_current ();
+  struct file *file;
+  file = cur -> fd[file_descriptor];
+  if (file == NULL || file_descriptor < 2 || file_descriptor >= 128)
+    exit (-1);
   return file_length (file);
 }
 
 unsigned
-tell (int fd)
+tell (int file_descriptor)
 {
-  struct file *file = thread_current ()->fd[fd];
-  if (file == NULL)
-   exit (-1);
+  struct thread *cur = thread_current ();
+  struct file *file;
+  file = cur -> fd[file_descriptor];
+  if (file == NULL || file_descriptor < 2 || file_descriptor >= 128){
+    exit (-1);
+  }
   return file_tell (file);
 } 
 
 void
-seek (int fd, unsigned position)
+seek (int fd, unsigned location)
 {
-  struct file *file = thread_current ()->fd[fd];
-  if (file == NULL)
-   exit (-1);
-  file_seek (file, position);
+  struct thread *cur = thread_current ();
+  struct file *file;
+  file = cur -> fd[fd];
+  if (file == NULL || fd < 2 || fd >= 128){
+    exit (-1);
+  }
+  file_seek (file, location);
 }
 
 pid_t
 exec (const char *file)
 {
-  if (file == NULL)
-   exit (-1);
+  if (file == NULL) exit (-1);
   tid_t child_tid = process_execute (file);
   return (pid_t)child_tid;
 }
 
 int
-wait (pid_t pid)
+syscall_wait (pid_t pid)
 {
   return process_wait((tid_t)pid);
 }
 
+void
+syscall_init (void) 
+{
+  intr_register_int (0x30, 3, INTR_ON, syscall_handler, "syscall");
+  sema_init(&filesys_sema, 1);
+}
