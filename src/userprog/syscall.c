@@ -67,67 +67,67 @@ syscall_handler (struct intr_frame *f)
   }
 
   case SYS_WRITE: {
-      int fd = FETCHING_ARGS(int, esp, 1);
+      int file_descriptor = FETCHING_ARGS(int, esp, 1);
       const void *buffer = FETCHING_ARGS(const void *, esp, 2);
       unsigned size = FETCHING_ARGS(unsigned, esp, 3);
       buffer = pagedir_get_page(cur->pagedir, buffer);
-      f->eax = syscall_write(fd, buffer, size); // Write to a file/console
+      f->eax = syscall_write(file_descriptor, buffer, size); // Write to a file/console
       break;
   }
 
   case SYS_READ: {
-      int fd = FETCHING_ARGS(int, esp, 1);
+      int file_descriptor = FETCHING_ARGS(int, esp, 1);
       void *buffer = FETCHING_ARGS(void *, esp, 2);
       unsigned size = FETCHING_ARGS(unsigned, esp, 3);
-      f->eax = syscall_read(fd, buffer, size);        // Read from the file/input
+      f->eax = syscall_read(file_descriptor, buffer, size);        // Read from the file/input
       break;
   }
 
    case SYS_CREATE: {
-      const char *file_name = FETCHING_ARGS(const char *, esp, 1);
+      const char *filename = FETCHING_ARGS(const char *, esp, 1);
       unsigned size = FETCHING_ARGS(unsigned, esp, 2);
-      file_name = (const char *)pagedir_get_page(cur->pagedir, file_name);
-      f->eax = create(file_name, size);           // Create file
+      filename = (const char *)pagedir_get_page(cur->pagedir, filename);
+      f->eax = create(filename, size);           // Create file
       break;
   }
 
   case SYS_REMOVE: {
-      const char *file_name = FETCHING_ARGS(const char *, esp, 1);
-      file_name = (const char *)pagedir_get_page(cur->pagedir, file_name);
+      const char *filename = FETCHING_ARGS(const char *, esp, 1);
+      filename = (const char *)pagedir_get_page(cur->pagedir, filename);
       sema_down(&filesys_sema);
-      f->eax = filesys_remove(file_name);
+      f->eax = filesys_remove(filename);
       sema_up(&filesys_sema);
       break;
   }
 
   case SYS_OPEN: {
-      const char *file_name = FETCHING_ARGS(const char *, esp, 1);
-      f->eax = open(file_name);
+      const char *filename = FETCHING_ARGS(const char *, esp, 1);
+      f->eax = open(filename);
       break;
   }
 
   case SYS_FILESIZE: {
-      int fd = FETCHING_ARGS(int, esp, 1);
-      f->eax = syscall_filesize(fd);          // Get size of a file
+      int file_descriptor = FETCHING_ARGS(int, esp, 1);
+      f->eax = syscall_filesize(file_descriptor);          // Get size of a file
       break;
   }
 
   case SYS_CLOSE: {
-      int fd = FETCHING_ARGS(int, esp, 1);
-      close(fd);
+      int file_descriptor = FETCHING_ARGS(int, esp, 1);
+      close(file_descriptor);
       break;
   }
 
   case SYS_TELL: {
-      int fd = FETCHING_ARGS(int, esp, 1);
-      f->eax = tell(fd);                         // Get current position in the file
+      int file_descriptor = FETCHING_ARGS(int, esp, 1);
+      f->eax = tell(file_descriptor);                         // Get current position in the file
       break;
   }
 
   case SYS_SEEK: {
-      int fd = FETCHING_ARGS(int, esp, 1);
+      int file_descriptor = FETCHING_ARGS(int, esp, 1);
       unsigned position = FETCHING_ARGS(unsigned, esp, 2);
-      seek(fd, position);                       // Change current position in the file
+      seek(file_descriptor, position);                       // Change current position in the file
       break;
   }
   default: {
@@ -173,11 +173,11 @@ exit (int status)
 }
 
 bool
-create (const char *file_name, unsigned size)
+create (const char *filename, unsigned size)
 {
-  if (file_name == NULL) exit (-1);    
+  if (filename == NULL) exit (-1);    
   sema_down (&filesys_sema);
-  bool succ = filesys_create (file_name, size);
+  bool succ = filesys_create (filename, size);
   sema_up (&filesys_sema);
   return succ;
 }
@@ -232,7 +232,7 @@ int read_from_file(int file_descriptor, char *buff, unsigned size)
   struct thread *current_thread = thread_current();
   struct file *file_descriptor_file = current_thread->fd[file_descriptor];
    if (file_descriptor_file == NULL) return -1;  // Invalid fd
-  // Deny the writes if it is exec file
+  // Deny writes if it is exec file
   struct inode *opened_file_inode = file_get_inode(file_descriptor_file);
   struct inode *exec_file_inode = file_get_inode(current_thread->proc_metadata->executable_file);
   if (opened_file_inode == exec_file_inode) {

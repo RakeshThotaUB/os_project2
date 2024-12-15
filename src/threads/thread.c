@@ -478,8 +478,7 @@ init_thread (struct thread *t, const char *name, int priority)
   intr_set_level (old_level);
 }
 
-struct process_metadata *
-initiate_process_metadata (tid_t child_tid)
+struct process_metadata *initiate_process_metadata (tid_t child_tid)
 {
   struct process_metadata *proc_metadata = calloc (1, sizeof (struct process_metadata));
 
@@ -493,7 +492,6 @@ initiate_process_metadata (tid_t child_tid)
   proc_metadata->exit_status = 0;
   sema_init (&proc_metadata->process_exit_sema, 0);
   sema_init (&proc_metadata->process_load_sema, 0);
-  
   struct list *children_list = &thread_current()->child_process_metalist;
 
   proc_metadata->metadata_elem.next = children_list->head.next; 
