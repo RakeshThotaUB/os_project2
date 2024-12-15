@@ -22,7 +22,8 @@ struct semaphore filesys_sema;
 
 static void syscall_handler (struct intr_frame *);
 
-#define FETCH_ARG(type, esp, offset) ({                  \
+// Macro is used for fetching the arguments from the stack
+#define FETCHING_ARGS(type, esp, offset) ({                  \
     void *argument_pointer = (void *)((esp) + (offset) * 4);      \
     check_ptr(argument_pointer);                                  \
     (type)(*((type *)argument_pointer));                          \
@@ -36,60 +37,62 @@ syscall_handler (struct intr_frame *f)
   check_ptr (f->esp);
 
   void *esp = f->esp;
-  int syscall_num = FETCH_ARG(int, esp, 0);
+  int syscall_num = FETCHING_ARGS(int, esp, 0);  // Get the syscall num
   struct thread *cur = thread_current ();
 
   switch (syscall_num)
   {
    case SYS_HALT:
-      syscall_halt ();
+      syscall_halt ();  // Shutdown 
       break;
 
   case SYS_EXIT: {
-      int exit_status = FETCH_ARG(int, esp, 1);
-      exit(exit_status);
+      int exit_status;
+      exit_status = FETCHING_ARGS(int, esp, 1);
+      exit(exit_status);  // Exit the current process
       break;
   }
         
    case SYS_EXEC: {
-      const char *command_line = FETCH_ARG(const char *, esp, 1);
-      f->eax = exec((const char *)pagedir_get_page(cur->pagedir, command_line));
+      const char *command_line = FETCHING_ARGS(const char *, esp, 1);
+      check_str(command_line);
+      f->eax = exec((const char *)pagedir_get_page(cur->pagedir, command_line)); // Executing the program
       break;
   }
 
   case SYS_WAIT: {
-      pid_t pid = FETCH_ARG(pid_t, esp, 1);
-      f->eax = syscall_wait(pid);
+      pid_t pid = FETCHING_ARGS(pid_t, esp, 1);
+      f->eax = syscall_wait(pid);  // Wait for the child process for finish
       break;
   }
 
   case SYS_WRITE: {
-      int fd = FETCH_ARG(int, esp, 1);
-      const void *buffer = FETCH_ARG(const void *, esp, 2);
-      unsigned size = FETCH_ARG(unsigned, esp, 3);
+      int fd = FETCHING_ARGS(int, esp, 1);
+      const void *buffer = FETCHING_ARGS(const void *, esp, 2);
+      unsigned size = FETCHING_ARGS(unsigned, esp, 3);
       buffer = pagedir_get_page(cur->pagedir, buffer);
-      f->eax = syscall_write(fd, buffer, size);
+      f->eax = syscall_write(fd, buffer, size); // Write to a file/console
       break;
   }
 
   case SYS_READ: {
-      int fd = FETCH_ARG(int, esp, 1);
-      void *buffer = FETCH_ARG(void *, esp, 2);
-      unsigned size = FETCH_ARG(unsigned, esp, 3);
-      f->eax = syscall_read(fd, buffer, size);
+      int fd = FETCHING_ARGS(int, esp, 1);
+      void *buffer = FETCHING_ARGS(void *, esp, 2);
+      unsigned size = FETCHING_ARGS(unsigned, esp, 3);
+      f->eax = syscall_read(fd, buffer, size);        // Read from the file/input
       break;
   }
 
    case SYS_CREATE: {
-      const char *file_name = FETCH_ARG(const char *, esp, 1);
-      unsigned size = FETCH_ARG(unsigned, esp, 2);
+      const char *file_name = FETCHING_ARGS(const char *, esp, 1);
+      unsigned size = FETCHING_ARGS(unsigned, esp, 2);
       file_name = (const char *)pagedir_get_page(cur->pagedir, file_name);
-      f->eax = create(file_name, size);
+      f->eax = create(file_name, size);           // Create file
       break;
   }
 
   case SYS_REMOVE: {
-      const char *file_name = FETCH_ARG(const char *, esp, 1);
+      const char *file_name = FETCHING_ARGS(const char *, esp, 1);
       file_name = (const char *)pagedir_get_page(cur->pagedir, file_name);
       sema_down(&filesys_sema);
       f->eax = filesys_remove(file_name);
@@ -98,33 +101,33 @@ syscall_handler (struct intr_frame *f)
   }
 
   case SYS_OPEN: {
-      const char *file_name = FETCH_ARG(const char *, esp, 1);
+      const char *file_name = FETCHING_ARGS(const char *, esp, 1);
       f->eax = open(file_name);
       break;
   }
 
   case SYS_FILESIZE: {
-      int fd = FETCH_ARG(int, esp, 1);
-      f->eax = filesize(fd);
+      int fd = FETCHING_ARGS(int, esp, 1);
+      f->eax = syscall_filesize(fd);          // Get size of a file
       break;
   }
 
   case SYS_CLOSE: {
-      int fd = FETCH_ARG(int, esp, 1);
+      int fd = FETCHING_ARGS(int, esp, 1);
       close(fd);
       break;
   }
 
   case SYS_TELL: {
-      int fd = FETCH_ARG(int, esp, 1);
-      f->eax = tell(fd);
+      int fd = FETCHING_ARGS(int, esp, 1);
+      f->eax = tell(fd);                         // Get current position in the file
       break;
   }
 
   case SYS_SEEK: {
-      int fd = FETCH_ARG(int, esp, 1);
-      unsigned position = FETCH_ARG(unsigned, esp, 2);
-      seek(fd, position);
+      int fd = FETCHING_ARGS(int, esp, 1);
+      unsigned position = FETCHING_ARGS(unsigned, esp, 2);
+      seek(fd, position);                       // Change current position in the file
       break;
   }
   default: {
@@ -133,12 +136,23 @@ syscall_handler (struct intr_frame *f)
 }
 }
 
-
+// Checking if the user pointer is valid or not
 void 
 check_ptr(void *uaddr) {
     if (uaddr == NULL || !is_user_vaddr(uaddr) || pagedir_get_page(thread_current()->pagedir, uaddr) == NULL) {
         exit(-1);
     }
+}
+
+void 
+check_str(const char *string) {
+    if (string == NULL)  exit(-1); 
+    char *ptr = string;
+    for (; is_user_vaddr(ptr); ptr++) {
+        if (pagedir_get_page(thread_current()->pagedir, (void *)ptr) == NULL) exit(-1); 
+        if (*ptr == '\0') return; 
+    }
+    exit(-1);
 }
 
 void 
@@ -203,13 +217,13 @@ static int
 read_from_stdin(char *buffer, unsigned size)
 {
   unsigned val = 0;
-  while (val < size) // Leaving space for the null terminator 
+  while (val < size) 
   {
     char input = input_getc();
     buffer[val++] = input;
     if (input == '\n') break;
   }
-  return (int)val;  // Returning the number of bytes that are read
+  return (int)val;  
 }
 
 static 
@@ -273,8 +287,6 @@ static int write_to_file(int file_descriptor, const char *buff, unsigned size, i
 int
 syscall_write(int file_descriptor, const void *buffer, unsigned size)
 {
-  // check_ptr(buffer);
-  // check_ptr((const void *)((uint8_t *)buffer + size - 1));
   const char *buff = (const char *)buffer;  
   if (file_descriptor < 1 || file_descriptor >= 128)
     return -1;
@@ -310,7 +322,7 @@ close (int file_descriptor)
 }
 
 int
-filesize (int file_descriptor)
+syscall_filesize (int file_descriptor)
 {
   struct thread *current_thread = thread_current ();
   struct file *file;

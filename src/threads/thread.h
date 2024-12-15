@@ -96,15 +96,14 @@ struct thread
 
     /* Shared between thread.c and synch.c. */
     struct list_elem elem;              /* List element. */
-    bool exit_status;
 
-// #ifdef USERPROG
+#ifdef USERPROG
     /* Owned by userprog/process.c. */
     uint32_t *pagedir;                  /* Page directory. */
-    struct file *fd[128];		
+    struct file *fd[MAX_FD];		
     struct process_metadata *proc_metadata;
     struct list child_process_metalist;
-// #endif
+#endif
 
     /* Owned by thread.c. */
     unsigned magic;                     /* Detects stack overflow. */

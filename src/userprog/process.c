@@ -86,7 +86,7 @@ start_process (void *file_name_)
   struct file *file = filesys_open (file_name);
   struct thread *current_thread;
   current_thread = thread_current ();
-  current_thread->proc_metadata->executable_file = file;
+  current_thread -> proc_metadata -> executable_file = file;
 
   /* Initialize interrupt frame and load executable. */
   memset (&if_, 0, sizeof if_);
@@ -97,9 +97,9 @@ start_process (void *file_name_)
 
   /* If load failed, quit. */
   palloc_free_page (file_name);
-  current_thread->proc_metadata->executable_file = file;
-  current_thread->proc_metadata->load_status = success; 
-  sema_up(&(current_thread->proc_metadata->process_load_sema));
+  current_thread -> proc_metadata -> executable_file = file;
+  current_thread -> proc_metadata ->load_status = success; 
+  sema_up(&(current_thread -> proc_metadata->process_load_sema));
   if (!success)
   {
     thread_exit ();
@@ -132,17 +132,17 @@ process_wait (tid_t child_tid UNUSED)
   char *save_ptr;
    struct thread *current_thread;
   current_thread = thread_current ();
-  struct list_elem *element = list_begin(&current_thread->child_process_metalist);
+  struct list_elem *element = list_begin(&current_thread -> child_process_metalist);
 
-  while (element != list_end(&current_thread->child_process_metalist)) 
+  while (element != list_end(&current_thread -> child_process_metalist)) 
   {
     struct process_metadata *child_data = list_entry(element, struct process_metadata, metadata_elem);
 
     if (child_data->process_id == child_tid) 
     {
-      sema_down(&child_data->process_exit_sema);
-      status = child_data->exit_status;
-      sema_up(&child_data->process_exit_sema);
+      sema_down(&child_data -> process_exit_sema);
+      status = child_data -> exit_status;
+      sema_up(&child_data -> process_exit_sema);
       list_remove(element); 
       break;
     } 
