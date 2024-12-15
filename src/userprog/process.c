@@ -20,12 +20,10 @@
 
 
 static thread_func start_process NO_RETURN;
-static bool load (const char *cmdline, void (**eip) (void), void **esp,
-		  char **save_ptr);
+static bool load (const char *cmdline, void (**eip) (void), void **esp, char **save_ptr);
 
 #define SIZE_ARGV  2
 #define PROCESS_NOT_FOUND -1
-// #define WORD_SIZE 4
 
 /* Starts a new thread running a user program loaded from
    FILENAME.  The new thread may be scheduled (and may even exit)
@@ -54,21 +52,23 @@ process_execute (const char *file_name)
 
   else 
   {
-    struct list_elem *list_elem = list_begin (&thread_current ()->child_process_metalist);
-    while (list_elem != list_end (&thread_current ()->child_process_metalist))
+    struct list_elem *element = list_begin (&thread_current ()->child_process_metalist);
+    while (element != list_end (&thread_current ()->child_process_metalist))
     {
-      struct process_metadata *metadata = list_entry (list_elem, struct process_metadata, metadata_elem);
-      if (tid == metadata->process_id)
+      struct process_metadata *pro_metadata = list_entry (element, struct process_metadata, metadata_elem);
+      if (tid == pro_metadata->process_id)
       {
-        sema_down (&metadata->process_load_sema);
-        if (metadata->load_status == false) tid = TID_ERROR;
-        sema_up (&metadata->process_load_sema);
+        sema_down (&pro_metadata->process_load_sema);
+        if (pro_metadata->load_status == false) 
+        {
+          tid = TID_ERROR;
+        }
+        sema_up (&pro_metadata->process_load_sema);
         break;
       }
-      list_elem = list_next (list_elem);
+      element = list_next (element);
     }
   }
-
   return tid;
 }
 
@@ -81,13 +81,12 @@ start_process (void *file_name_)
   char *file_name = file_name_;
   struct intr_frame if_;
   bool success;
-  struct thread *cur;
-  cur = thread_current ();
-
   char *save_ptr;
   file_name = strtok_r (file_name, " ", &save_ptr);
   struct file *file = filesys_open (file_name);
-  cur->proc_metadata->executable_file = file;
+  struct thread *current_thread;
+  current_thread = thread_current ();
+  current_thread->proc_metadata->executable_file = file;
 
   /* Initialize interrupt frame and load executable. */
   memset (&if_, 0, sizeof if_);
@@ -98,8 +97,9 @@ start_process (void *file_name_)
 
   /* If load failed, quit. */
   palloc_free_page (file_name);
-  cur->proc_metadata->load_status = success; 
-  sema_up(&(cur->proc_metadata->process_load_sema));
+  current_thread->proc_metadata->executable_file = file;
+  current_thread->proc_metadata->load_status = success; 
+  sema_up(&(current_thread->proc_metadata->process_load_sema));
   if (!success)
   {
     thread_exit ();
@@ -130,9 +130,11 @@ process_wait (tid_t child_tid UNUSED)
 {
   int status = PROCESS_NOT_FOUND; 
   char *save_ptr;
-  struct list_elem *element = list_begin(&thread_current()->child_process_metalist);
+   struct thread *current_thread;
+  current_thread = thread_current ();
+  struct list_elem *element = list_begin(&current_thread->child_process_metalist);
 
-  while (element != list_end(&thread_current()->child_process_metalist)) 
+  while (element != list_end(&current_thread->child_process_metalist)) 
   {
     struct process_metadata *child_data = list_entry(element, struct process_metadata, metadata_elem);
 
@@ -388,6 +390,7 @@ load (const char *file_name, void (**eip) (void), void **esp, char **save_ptr)
       if (argv == NULL) {
           return -1;
       }
+      
       memcpy(resized_argv, argv, argc * size_char);
       argv = resized_argv;
     }

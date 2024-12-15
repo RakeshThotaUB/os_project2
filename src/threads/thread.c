@@ -71,7 +71,7 @@ static void *alloc_frame (struct thread *, size_t size);
 static void schedule (void);
 void thread_schedule_tail (struct thread *prev);
 static tid_t allocate_tid (void);
-struct process_metadata *init_process_metadata (tid_t child_tid);
+struct process_metadata *initiate_process_metadata (tid_t child_tid);
 
 /* Initializes the threading system by transforming the code
    that's currently running into a thread.  This can't work in
@@ -205,7 +205,7 @@ thread_create (const char *name, int priority,
   sf->eip = switch_entry;
   sf->ebp = 0;
 
-  t->proc_metadata = init_process_metadata (tid);
+  t->proc_metadata = initiate_process_metadata (tid);
   /* Add to run queue. */
   thread_unblock (t);
 
@@ -479,7 +479,7 @@ init_thread (struct thread *t, const char *name, int priority)
 }
 
 struct process_metadata *
-init_process_metadata (tid_t child_tid)
+initiate_process_metadata (tid_t child_tid)
 {
   struct process_metadata *proc_metadata = calloc (1, sizeof (struct process_metadata));
 
@@ -494,10 +494,16 @@ init_process_metadata (tid_t child_tid)
   sema_init (&proc_metadata->process_exit_sema, 0);
   sema_init (&proc_metadata->process_load_sema, 0);
   
-  struct list children = thread_current ()->child_process_metalist;
-  list_push_front (&children, &proc_metadata->metadata_elem);
-  return proc_metadata;
+  struct list *children_list = &thread_current()->child_process_metalist;
 
+  proc_metadata->metadata_elem.next = children_list->head.next; 
+  proc_metadata->metadata_elem.prev = &children_list->head;
+
+  if (children_list->head.next != NULL) {
+        children_list->head.next->prev = &proc_metadata->metadata_elem; 
+  }
+  children_list->head.next = &proc_metadata->metadata_elem; 
+  return proc_metadata;
 }
 
 /* Allocates a SIZE-byte frame at the top of thread T's stack and

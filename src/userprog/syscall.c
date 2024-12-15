@@ -22,12 +22,12 @@ struct semaphore filesys_sema;
 
 static void syscall_handler (struct intr_frame *);
 
-// Macro is used for fetching the arguments
 #define FETCH_ARG(type, esp, offset) ({                  \
     void *argument_pointer = (void *)((esp) + (offset) * 4);      \
     check_ptr(argument_pointer);                                  \
     (type)(*((type *)argument_pointer));                          \
 })
+
 
 static void
 syscall_handler (struct intr_frame *f) 
@@ -51,7 +51,6 @@ syscall_handler (struct intr_frame *f)
       break;
   }
         
-
    case SYS_EXEC: {
       const char *command_line = FETCH_ARG(const char *, esp, 1);
       f->eax = exec((const char *)pagedir_get_page(cur->pagedir, command_line));
@@ -134,20 +133,10 @@ syscall_handler (struct intr_frame *f)
 }
 }
 
-void
-get_arguments (int *esp, int *args, int count)
-{
-  for (int i = 0; i < count; i++)
-  {
-    int *next = ((esp + i) + 1);
-    check_ptr (next);
-    args[i] = *next;
-  }
-}
 
 void 
-check_ptr(void *ptr) {
-    if (ptr == NULL || !is_user_vaddr(ptr) || pagedir_get_page(thread_current()->pagedir, ptr) == NULL) {
+check_ptr(void *uaddr) {
+    if (uaddr == NULL || !is_user_vaddr(uaddr) || pagedir_get_page(thread_current()->pagedir, uaddr) == NULL) {
         exit(-1);
     }
 }
@@ -160,10 +149,12 @@ syscall_halt(void) {
 void
 exit (int status)
 {
-  struct thread *cur = thread_current ();
-  cur->proc_metadata->exit_status = status;
-  sema_up (&cur->proc_metadata->process_exit_sema);
-  printf ("%s: exit(%d)\n", cur->name, status);
+  struct thread *current_thread = thread_current ();
+  if (current_thread->proc_metadata != NULL) {
+        current_thread->proc_metadata->exit_status = status;
+        sema_up(&current_thread->proc_metadata->process_exit_sema);
+    }
+  printf ("%s: exit(%d)\n", current_thread->name, status);
   thread_exit ();
 }
 
@@ -189,15 +180,17 @@ open (const char *file)
   sema_up (&filesys_sema);
 
   if (opened_file == NULL) return -1;
-
-  struct thread *cur = thread_current ();
-  if (file_get_inode (opened_file) == file_get_inode(cur->proc_metadata->executable_file))
-      file_deny_write (opened_file);
+  struct thread *current_thread = thread_current ();
+  struct inode *opened_file_inode = file_get_inode(opened_file);
+  struct inode *exec_file_inode = file_get_inode(current_thread->proc_metadata->executable_file);
+  if (opened_file_inode == exec_file_inode) {
+      file_deny_write(opened_file);
+  }
 
   int i = 2;
   while (i < MAX_FD) {
-      if (cur->fd[i] == NULL) {
-          cur->fd[i] = opened_file;
+      if (current_thread->fd[i] == NULL) {
+          current_thread->fd[i] = opened_file;
           return i;
       }
       i++;
@@ -220,29 +213,33 @@ read_from_stdin(char *buffer, unsigned size)
 }
 
 static 
-int read_from_file(int file_descriptor, char *buffer, unsigned size)
+int read_from_file(int file_descriptor, char *buff, unsigned size)
 {
-  struct thread *cur = thread_current();
-  struct file *fd_file = cur->fd[file_descriptor];
-   if (fd_file == NULL) return -1;  // Invalid fd
+  struct thread *current_thread = thread_current();
+  struct file *file_descriptor_file = current_thread->fd[file_descriptor];
+   if (file_descriptor_file == NULL) return -1;  // Invalid fd
   // Deny the writes if it is exec file
-  if (file_get_inode(fd_file) == file_get_inode(cur->proc_metadata->executable_file))
-  {
-    file_deny_write(fd_file);
+  struct inode *opened_file_inode = file_get_inode(file_descriptor_file);
+  struct inode *exec_file_inode = file_get_inode(current_thread->proc_metadata->executable_file);
+  if (opened_file_inode == exec_file_inode) {
+      file_deny_write(file_descriptor_file);
   }
-  return file_read(fd_file, buffer, size);
+
+  return file_read(file_descriptor_file, buff, size);
 }
 
 int
 syscall_read (int fd, void *buffer, unsigned size)
 {
-  struct thread *cur = thread_current ();
+  struct thread *current_thread = thread_current ();
   char *buff = (char *)buffer;
   check_ptr (buff);
   int return_value;
-  if (fd == 1 || fd < 0 || fd >= 128)
-    exit (-1);
+  
   if (fd == 0) return read_from_stdin(buff, size);
+  if (fd == 1 || fd < 0 || fd >= 128) {
+    exit (-1);
+  }
   else  
   {
     sema_down(&filesys_sema);
@@ -252,48 +249,62 @@ syscall_read (int fd, void *buffer, unsigned size)
   return return_value;
 }
 
-int
-syscall_write (int file_desc, const void *_buffer, unsigned size)
+static int write_to_stdout(const char *buff, unsigned size)
 {
-  char *buffer = (char *)_buffer;
-  struct thread *cur = thread_current ();
-  struct file *file_to_write;
-
-  if (buffer == NULL)
-    exit (-1);
-  int retval;
-  if (file_desc < 1 || file_desc > 128)
-    return -1;
-  if (file_desc == 1) {
-    putbuf (buffer, size);
-    retval = size;
-  }
-  else
-  {
-    sema_down (&filesys_sema);
-    file_to_write = cur->fd[file_desc];
-    if (file_to_write != NULL) {
-    	retval = file_write (file_to_write, buffer, size);
-    	cur->fd[file_desc] = file_to_write;
-        file_allow_write (file_to_write);
-    }
-    else retval = -1;
-    sema_up (&filesys_sema);
-  }
-  return retval;
+  putbuf(buff, size);  
+  return size;           
 }
 
+static int write_to_file(int file_descriptor, const char *buff, unsigned size, int return_val)
+{
+  struct thread *current_thread = thread_current();
+  struct file *target_file;
+  int return_value = return_val; 
+  target_file = current_thread->fd[file_descriptor];  
+  if (target_file == NULL){
+    return -1; 
+  } 
+  return_value = file_write(target_file, buff, size); 
+  current_thread->fd[file_descriptor] = target_file; 
+  file_allow_write(target_file);  
+  return return_value;  
+}
+
+int
+syscall_write(int file_descriptor, const void *buffer, unsigned size)
+{
+  // check_ptr(buffer);
+  // check_ptr((const void *)((uint8_t *)buffer + size - 1));
+  const char *buff = (const char *)buffer;  
+  if (file_descriptor < 1 || file_descriptor >= 128)
+    return -1;
+  if (buff == NULL)
+    exit(-1);
+  int return_val;  
+  if (file_descriptor == 1)  
+  {
+    return_val = write_to_stdout(buff, size);
+  }
+  else  
+  {
+    sema_down(&filesys_sema);  
+    return_val = write_to_file(file_descriptor, buff, size, return_val);
+    sema_up(&filesys_sema);
+  }
+  return return_val;  
+}
 
 void
 close (int file_descriptor)
 {
-  struct thread *cur = thread_current ();
-  if (file_descriptor >= 128 || file_descriptor < 2) 
+  if (file_descriptor >= 128 || file_descriptor < 2) {
     return;
+  }
   sema_down (&filesys_sema);
-  if (cur->fd[file_descriptor] != NULL) {
-    file_close (cur->fd[file_descriptor]);
-    cur->fd[file_descriptor] = NULL;
+  struct thread *current_thread = thread_current();
+  if (current_thread->fd[file_descriptor] != NULL) {
+    file_close (current_thread->fd[file_descriptor]);
+    current_thread->fd[file_descriptor] = NULL;
   }
   sema_up (&filesys_sema);
 }
@@ -301,44 +312,64 @@ close (int file_descriptor)
 int
 filesize (int file_descriptor)
 {
-  struct thread *cur = thread_current ();
+  struct thread *current_thread = thread_current ();
   struct file *file;
-  file = cur -> fd[file_descriptor];
-  if (file == NULL || file_descriptor < 2 || file_descriptor >= 128)
+  file = current_thread -> fd[file_descriptor];
+  if (file == NULL){
     exit (-1);
+  }
+  else if (file_descriptor < 2){
+    exit (-1);
+  }
+  else if (file_descriptor >= 128){
+    exit (-1);
+  }
   return file_length (file);
 }
 
 unsigned
 tell (int file_descriptor)
 {
-  struct thread *cur = thread_current ();
+  struct thread *current_thread = thread_current ();
   struct file *file;
-  file = cur -> fd[file_descriptor];
-  if (file == NULL || file_descriptor < 2 || file_descriptor >= 128){
+  file = current_thread -> fd[file_descriptor];
+  if (file == NULL){
+    exit (-1);
+  }
+  else if (file_descriptor < 2){
+    exit (-1);
+  }
+  else if (file_descriptor >= 128){
     exit (-1);
   }
   return file_tell (file);
 } 
 
 void
-seek (int fd, unsigned location)
+seek (int file_descriptor, unsigned loc)
 {
-  struct thread *cur = thread_current ();
+  struct thread *current_thread = thread_current ();
   struct file *file;
-  file = cur -> fd[fd];
-  if (file == NULL || fd < 2 || fd >= 128){
+  file = current_thread -> fd[file_descriptor];
+  if (file == NULL){
     exit (-1);
   }
-  file_seek (file, location);
+  else if (file_descriptor < 2){
+    exit (-1);
+  }
+  else if (file_descriptor >= 128){
+    exit (-1);
+  }
+  file_seek (file, loc);
 }
 
 pid_t
 exec (const char *file)
 {
   if (file == NULL) exit (-1);
-  tid_t child_tid = process_execute (file);
-  return (pid_t)child_tid;
+  tid_t child_process_id = process_execute (file);
+
+  return (pid_t)child_process_id;
 }
 
 int

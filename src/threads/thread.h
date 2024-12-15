@@ -102,26 +102,14 @@ struct thread
     /* Owned by userprog/process.c. */
     uint32_t *pagedir;                  /* Page directory. */
     struct file *fd[128];		
-    struct list child_process_metalist;
     struct process_metadata *proc_metadata;
-
+    struct list child_process_metalist;
 // #endif
 
     /* Owned by thread.c. */
     unsigned magic;                     /* Detects stack overflow. */
   };
 
-/* Metadata for a process */
-struct process_metadata
-{
-  tid_t process_id;
-  int exit_status;
-  bool load_status;
-  struct file *executable_file;
-  struct semaphore process_exit_sema;
-  struct semaphore process_load_sema;
-  struct list_elem metadata_elem;
-};
 
 /* If false (default), use round-robin scheduler.
    If true, use multi-level feedback queue scheduler.
