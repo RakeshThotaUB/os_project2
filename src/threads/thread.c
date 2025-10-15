@@ -11,6 +11,7 @@
 #include "threads/switch.h"
 #include "threads/synch.h"
 #include "threads/vaddr.h"
+#include "threads/malloc.h"
 #ifdef USERPROG
 #include "userprog/process.h"
 #endif
@@ -70,6 +71,7 @@ static void *alloc_frame (struct thread *, size_t size);
 static void schedule (void);
 void thread_schedule_tail (struct thread *prev);
 static tid_t allocate_tid (void);
+struct process_metadata *initiate_process_metadata (tid_t child_tid);
 
 /* Initializes the threading system by transforming the code
    that's currently running into a thread.  This can't work in
@@ -182,6 +184,11 @@ thread_create (const char *name, int priority,
   /* Initialize thread. */
   init_thread (t, name, priority);
   tid = t->tid = allocate_tid ();
+#ifdef USERPROG
+  int i;
+  for (i = 0; i < MAX_FD; i++)
+    t->fd[i] = NULL;
+#endif
 
   /* Stack frame for kernel_thread(). */
   kf = alloc_frame (t, sizeof *kf);
@@ -198,6 +205,7 @@ thread_create (const char *name, int priority,
   sf->eip = switch_entry;
   sf->ebp = 0;
 
+  t->proc_metadata = initiate_process_metadata (tid);
   /* Add to run queue. */
   thread_unblock (t);
 
@@ -463,10 +471,37 @@ init_thread (struct thread *t, const char *name, int priority)
   t->stack = (uint8_t *) t + PGSIZE;
   t->priority = priority;
   t->magic = THREAD_MAGIC;
+  list_init (&t->child_process_metalist);
 
   old_level = intr_disable ();
   list_push_back (&all_list, &t->allelem);
   intr_set_level (old_level);
+}
+
+struct process_metadata *initiate_process_metadata (tid_t child_tid)
+{
+  struct process_metadata *proc_metadata = calloc (1, sizeof (struct process_metadata));
+
+  if (proc_metadata == NULL) {
+        return NULL;
+  }
+
+  proc_metadata->process_id = child_tid;
+  proc_metadata->load_status = false;
+  proc_metadata->executable_file = NULL;
+  proc_metadata->exit_status = 0;
+  sema_init (&proc_metadata->process_exit_sema, 0);
+  sema_init (&proc_metadata->process_load_sema, 0);
+  struct list *children_list = &thread_current()->child_process_metalist;
+
+  proc_metadata->metadata_elem.next = children_list->head.next; 
+  proc_metadata->metadata_elem.prev = &children_list->head;
+
+  if (children_list->head.next != NULL) {
+        children_list->head.next->prev = &proc_metadata->metadata_elem; 
+  }
+  children_list->head.next = &proc_metadata->metadata_elem; 
+  return proc_metadata;
 }
 
 /* Allocates a SIZE-byte frame at the top of thread T's stack and

@@ -1,0 +1,330 @@
+		     +--------------------------+
+             | CS 140	                  |
+		     | PROJECT 2: USER PROGRAMS	|
+		     | DESIGN DOCUMENT        	|
+		     +--------------------------+
+
+---- GROUP ----
+
+>> Fill in the names and email addresses of your group members.
+
+Rakesh Thota <rthota2@buffalo.edu>
+Venkata Satya Pavan Sai T Nalamati <vnalamat@buffalo.edu>
+Sai Chandavolu <vchandav@buffalo.edu>
+
+---- PRELIMINARIES ----
+
+>> If you have any preliminary comments on your submission, notes for the
+>> TAs, or extra credit, please give them here.
+
+>> Describe briefly which parts of the assignment were implemented by
+>> each member of your team. If some team members contributed significantly
+>> more or less than others (e.g. 2x), indicate that here.
+
+>> Please cite any offline or online sources you consulted while
+>> preparing your submission, other than the Pintos documentation, course
+>> text, lecture notes, and course staff.
+
+			   ARGUMENT PASSING
+			   ================
+
+---- DATA STRUCTURES ----
+
+>> A1: Copy here the declaration of each new or changed `struct' or
+>> `struct' member, global or static variable, `typedef', or
+>> enumeration.  Identify the purpose of each in 25 words or less.
+
+/* The modification are made in the file /pintos/src/userprog/process.h and the following structure that is added. */
+struct process_metadata
+{
+  tid_t process_id;
+  bool load_status;
+  int exit_status;
+  struct semaphore process_load_sema;
+  struct semaphore process_exit_sema;
+  struct list_elem metadata_elem;
+  struct file *executable_file;
+};
+
+This is the new struct process_metadata that is created in the file "process.h".
+- process_id: This stores the thread identifier for the child thread.
+- load_status: Flags whether the child thread is loaded its executable file successfully into memory.
+- exit_status: It holds the exit status of a child thread, indicates whether it is completed successfully or failed.
+- process_load_sema: This will manage the load of the child thread, which ensures that, it is properly initialized before the execution.
+- process_exit_sema: Used for signal the completion of the child thread and for synchronizing the parent-child thread operations.
+- metadata_elem: This links this child metadata into the list to manage the multiple child threads.
+- executable_file: executable_file points to the file that contains the executable code for child thread.
+
+No additional struct members are created.
+
+
+---- ALGORITHMS ----
+
+>> A2: Briefly describe how you implemented argument parsing.  How do
+>> you arrange for the elements of argv[] to be in the right order?
+>> How do you avoid overflowing the stack page?
+
+1. Tokenize the Command line:-
+   Initially command line is split using the strtok_r() into tokens. Each token corresponds to the single argument
+2. Placing Arguments on the Stack:-
+   For each argument token:
+    - Decrease esp by (1+ strlen(token)) for making more space on the stack.
+    - Now, copy the argument string from kernel memory to user stack space.
+    - Store the address from the copied string into the argv[argc]
+    - Increment the arc
+    - If arc exceeds the current argv_size, we will relocate the argv for increasing the capacity. This will make sure the system is stable.
+
+3. Null-terminate the Argument Array:-
+    After pushing all the arguments, argv[argc] is now set to NULL and terminated.
+4. Memory safety
+	Once, done, we free the temporary array argv, which is allocated in the kernel. The arguments remain on the stack for user process to access.
+5. Stack Overflow Avoidance:
+    By limiting the number of arguments, and carefully checking available stack space, we avoid the overflowing the user stack. 
+    To prevent overflow, argv and the array of pointers to the arguments are resized dynamically as more arguments are encountered. This resizing is done by allocating more memory and copying the existing pointers to the new array. 
+
+---- RATIONALE ----
+
+>> A3: Why does Pintos implement strtok_r() but not strtok()?
+
+- strtok_r() is an re-entrant version of strtok as it uses an extra argument while saving the context of the tokenizing.
+- Whereas strtok() saves a global static pointer for reusing the function with NULL as first parameter m meaning the pointer gets messed up when working on two strings simultaneously. 
+- Hence we use strtok_r() which is thread safe and used in nested loops but not strtok().
+
+>> A4: In Pintos, the kernel separates commands into a executable name
+>> and arguments.  In Unix-like systems, the shell does this
+>> separation.  Identify at least two advantages of the Unix approach.
+
+- Unix approach restricts user from passing bad arguments directly  to kernel. Since, the Unix shell is a user program, it makes sense for it to separate the program's name and arguments before passing them to the kernel. 
+- The kernel doesn't need to treat the program name and arguments as one combined entity and hence,  letting the shell handle this separation is more logical and much more efficient .
+- Also this approach of Unix system, makes kernel spend less time working on the jobs that can be in turn done on the User space. 
+
+			     SYSTEM CALLS
+			     ============
+
+---- DATA STRUCTURES ----
+
+>> B1: Copy here the declaration of each new or changed `struct' or
+>> `struct' member, global or static variable, `typedef', or
+>> enumeration.  Identify the purpose of each in 25 words or less.
+
+
+struct thread
+  {
+    /* Owned by thread.c. */
+    tid_t tid;                          /* Thread identifier. */
+    enum thread_status status;          /* Thread state. */
+    char name[16];                      /* Name (for debugging purposes). */
+    uint8_t *stack;                     /* Saved stack pointer. */
+    int priority;                       /* Priority. */
+    struct list_elem allelem;           /* List element for all threads list. */
+
+    /* Shared between thread.c and synch.c. */
+    struct list_elem elem;              /* List element. */
+
+#ifdef USERPROG
+    /* Owned by userprog/process.c. */
+    uint32_t *pagedir;                  /* Page directory. */
+    struct file *fd[MAX_FD];		
+    struct process_metadata *proc_metadata;
+    struct list child_process_metalist;
+#endif
+
+    /* Owned by thread.c. */
+    unsigned magic;                     /* Detects stack overflow. */
+  };
+
+This is the modified struct thread, added struct members for the USERPROG specifics.
+- struct file *fd[MAX_FD]: This is an array for managing the file descriptors that are opened by thread, allows access to files with indexed handles.
+- struct process_metadata *proc_metadata: Pointer to the metadata for the current thread's child process, stores information about their state and resources.
+- struct list child_process_metalist: A list for holding the metadata of all thr child threads or processes that are created by the parent thread.
+
+
+
+struct process_metadata
+{
+  tid_t process_id;
+  bool load_status;
+  int exit_status;
+  struct semaphore process_load_sema;
+  struct semaphore process_exit_sema;
+  struct list_elem metadata_elem;
+  struct file *executable_file;
+};
+
+This is the new struct process_metadata that is created in the file "process.h".
+- process_id: This stores the thread identifier for the child thread.
+- load_status: Flags whether the child thread is loaded its executable file successfully into memory.
+- exit_status: It holds the exit status of a child thread, indicates whether it is completed successfully or failed.
+- process_load_sema: This will manage the load of the child thread, which ensures that, it is properly initialized before the execution.
+- process_exit_sema: Used for signal the completion of the child thread and for synchronizing the parent-child thread operations.
+- metadata_elem: This links this child metadata into the list to manage the multiple child threads.
+- executable_file: executable_file points to the file that contains the executable code for child thread.
+
+
+>> B2: Describe how file descriptors are associated with open files.
+>> Are file descriptors unique within the entire OS or just within a
+>> single process?
+
+- File Descriptors in pintos are associated with open files using fd array. This fd array in struct thread maps file descriptors to file pointers. 
+- File Descriptors are unique just within a single process, not in the entire OS (preventing interference between processes).
+
+ 
+---- ALGORITHMS ----
+
+>> B3: Describe your code for reading and writing user data from the
+>> kernel.
+
+Reading User Data:
+- User data is accessed using pointers. These pointers are validated using check_ptr() function and helps in mapping valid kernel address using pagedir_get_page.
+
+void check_ptr(void *uaddr) {
+    if (uaddr == NULL || !is_user_vaddr(uaddr) || pagedir_get_page(thread_current()->pagedir, uaddr) == NULL) {
+        exit(-1);
+    }
+}
+
+Writing User Data:
+- This is simple implementation where the user data is directly copied into the kernel memory using buffers. We use syscall_write function which also ensures the validity
+  of buffer pointer before using them.
+
+buffer = pagedir_get_page(cur->pagedir, buffer);
+if (buffer == NULL) exit(-1);
+
+
+>> B4: Suppose a system call causes a full page (4,096 bytes) of data
+>> to be copied from user space into the kernel.  What is the least
+>> and the greatest possible number of inspections of the page table
+>> (e.g. calls to pagedir_get_page()) that might result?  What about
+>> for a system call that only copies 2 bytes of data?  Is there room
+>> for improvement in these numbers, and how much?
+
+System call causes a full page (4,096 bytes) of data to be copied from user space into the kernel:
+-  Least Number of inspections: 1 (consider data as contiguous) -  In the first inspection (pagedir_get_page) returns a page header, which is identified by the address, 
+   so no further inspections are needed since it can only hold one page of data.		 
+-  Greatest Number inspections: 4096 (byte-by-byte).-  In this case, we need to check every address for ensuring a valid access.
+ 
+For 2-byte copy:
+-  Least Number of inspections: 1 inspection. Both bytes are within the same page.
+-  Greatest Number inspections: 2 inspections. If the 2 bytes spans in two pages, each of page should be validated separately.
+ 
+ Optimizations like aligned block copies, range validation approach, caching the last accessed page may reduces the number of inspections.
+ Example: Pre-checking the range of memory addresses within a single page can reduce multiple calls to one.
+
+>> B5: Briefly describe your implementation of the "wait" system call
+>> and how it interacts with process termination.
+
+The wait system call suspends the calling process until one of it child process is terminated. The interaction between this wait system call with process termination is that 
+the parent process waits until the child signals termination by calling sema_up during process_exit which unblocks the waiting parent. 
+
+
+>> B6: Any access to user program memory at a user-specified address
+>> can fail due to a bad pointer value.  Such accesses must cause the
+>> process to be terminated.  System calls are fraught with such
+>> accesses, e.g. a "write" system call requires reading the system
+>> call number from the user stack, then each of the call's three
+>> arguments, then an arbitrary amount of user memory, and any of
+>> these can fail at any point.  This poses a design and
+>> error-handling problem: how do you best avoid obscuring the primary
+>> function of code in a morass of error-handling?  Furthermore, when
+>> an error is detected, how do you ensure that all temporarily
+>> allocated resources (locks, buffers, etc.) are freed?  In a few
+>> paragraphs, describe the strategy or strategies you adopted for
+>> managing these issues.  Give an example.
+
+Error Handling:
+- Using helper functions such as check_ptr(), this function helps to find out bad pointer references and helps terminate them ensuring the process safety. This repeated pointer
+  validation accross the system calls helps in handling the errors from the core functionality.
+- The clean up handlers helps to free all the temporarily allocated resources like semaphores before exiting from the function.
+
+Example:
+Buffer validation:
+
+const char *buff = (const char *)buffer;
+if (buff == NULL) exit(-1);
+
+Proper management of semaphore:
+
+sema_down(&filesys_sema);
+return_val = write_to_file(file_descriptor, buff, size, return_val);
+sema_up(&filesys_sema);
+
+
+---- SYNCHRONIZATION ----
+
+>> B7: The "exec" system call returns -1 if loading the new executable
+>> fails, so it cannot return before the new executable has completed
+>> loading.  How does your code ensure this?  How is the load
+>> success/failure status passed back to the thread that calls "exec"?
+
+- The exec() system call in our code implementation, will use a semaphore (process_load_sema) to block parent until the child thread finishes 
+  loading by calling sema_up in start_process.
+- The load success/failure status passed back to the thread using a shared variable (load_status). By checking this shared variable the parent determines the return value of exec.
+
+
+>> B8: Consider parent process P with child process C.  How do you
+>> ensure proper synchronization and avoid race conditions when P
+>> calls wait(C) before C exits?  After C exits?  How do you ensure
+>> that all resources are freed in each case?  How about when P
+>> terminates without waiting, before C exits?  After C exits?  Are
+>> there any special cases?
+
+- P calls wait(C) before C exits: P blocks on process_exit_sema, C signals on exit by using semaphores (sema_up).
+- P calls wait(C) after C exits: P retrieves exit_status and cleans up C's metadata.
+- P terminates without waiting: Then the system undergoes cleanup process where kernel cleans up C's metadata before C exits. But when it comes to after C exits, Metadata is 
+  cleaned during kernel cleanup.
+Special cases: Orphan processes are cleaned by kernel and double wait(C) returns -1.
+
+
+
+---- RATIONALE ----
+
+>> B9: Why did you choose to implement access to user memory from the
+>> kernel in the way that you did?
+
+This design implementation where access to user memory is validated using 'check_ptr()' function before accessing them. This approach ensures safety, prevents kernel crashes, 
+and clear debugging.
+
+
+>> B10: What advantages or disadvantages can you see to your design
+>> for file descriptors?
+
+Advantages of file descriptors:
+- Simplified and efficient allocation.
+- fd array helps in mapping and avoids global conflicts
+
+Disadvantages:
+- Limited scalability (MAX_FD = 128) and more memory utilization due to per-process tables.
+
+
+>> B11: The default tid_t to pid_t mapping is the identity mapping.
+>> If you changed it, what advantages are there to your approach?
+
+The default tid_t to pid_t mapping is straightforward and avoids unnecessary complexity.
+If we changed it, the following are the advantages:- 
+- Supports multi-threaded processes
+- Scalable for systems with many threads or more complex process models.
+
+			   SURVEY QUESTIONS
+			   ================
+
+Answering these questions is optional, but it will help us improve the
+course in future quarters.  Feel free to tell us anything you
+want--these questions are just to spur your thoughts.  You may also
+choose to respond anonymously in the course evaluations at the end of
+the quarter.
+
+>> In your opinion, was this assignment, or any one of the three problems
+>> in it, too easy or too hard?  Did it take too long or too little time?
+
+>> Did you find that working on a particular part of the assignment gave
+>> you greater insight into some aspect of OS design?
+
+>> Is there some particular fact or hint we should give students in
+>> future quarters to help them solve the problems?  Conversely, did you
+>> find any of our guidance to be misleading?
+
+>> Do you have any suggestions for the TAs to more effectively assist
+>> students, either for future quarters or the remaining projects?
+
+>> Any other comments?
+

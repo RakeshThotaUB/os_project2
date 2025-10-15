@@ -4,6 +4,8 @@
 #include <debug.h>
 #include <list.h>
 #include <stdint.h>
+#include "filesys/file.h"
+#include "threads/synch.h"
 
 /* States in a thread's life cycle. */
 enum thread_status
@@ -24,6 +26,8 @@ typedef int tid_t;
 #define PRI_DEFAULT 31                  /* Default priority. */
 #define PRI_MAX 63                      /* Highest priority. */
 
+/* Maximum file descriptors for a process */
+#define MAX_FD 128
 /* A kernel thread or user process.
 
    Each thread structure is stored in its own 4 kB page.  The
@@ -96,6 +100,9 @@ struct thread
 #ifdef USERPROG
     /* Owned by userprog/process.c. */
     uint32_t *pagedir;                  /* Page directory. */
+    struct file *fd[MAX_FD];		
+    struct process_metadata *proc_metadata;
+    struct list child_process_metalist;
 #endif
 
     /* Owned by thread.c. */
